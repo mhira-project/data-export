@@ -1,0 +1,24 @@
+﻿Key;en;de;es;sq;sw
+tabSelection;Select a questionnaire from the tabs;Wählen Sie einen Fragebogen ;Seleccione un cuestionario;Ju lutem selektoni një pyeptësor nga dritaret;Select a questionnaire from the tabs
+selectAssessment;Select assessment:;Untersuchungstermine wählen:;Seleccione una evaluación;Selektoni vlerësimin:;Select assessment:
+timeoutAt;Session timed out at: ;Session beendet um: ;La sesión se cerró a las: ;Sesionit i skadoi koha më: ;Session timed out at: 
+timeoutReason;The session was terminated due to inactivity: ;Die Session wurde wegen inaktivität beendet:;La sesión fue terminada por inactividad:;Sesioni u ndërpre për shkak të mungesës së aktivitetit: ;The session was terminated due to inactivity: 
+noPatient;No patient was found.;Es wurde kein Patient gefunden.;No se encontró ningún/a paciente: ;Nuk u gjet asnjë klient.;No patient was found.
+noAssessment;No assessment found.;Es wurde kein Untersuchung gefunden.;No se encontró ninguna evaluación;Nuk u gjet asnjë vlerësim.;No assessment found.
+noQuestionnaire;No completed questionnaire found.;Es wurde kein ausgefüllter Fragebogen gefunden.;No se encontró ningún cuestionario completado;Nuk u gjet asnjë pyetësor i përfunduar.;No completed questionnaire found.
+figure;Figure;Graphische Darstellung;Figura;Figura;Figure
+evaluation;Evaluation;Evaluation;Evaluación;Vlerësimi;Evaluation
+data;Raw data;Rohdaten;Datos brutos;Të dhënat e papërpunuara;Raw data
+assessment;assessment;Untersuchung;Evaluación;vlerësimi;assessment
+interpretation;interpretation;Interpretation;Interpretación;interpretimi;interpretation
+recommendation;recommendation;Empfehlung;Recomendación;rekomandimi;recommendation
+warning;warning;Warnung;Alerta;kujdes;warning
+time;time;Zeitpunkt;Tiempo;koha;time
+scale;scale;Skala;Escala;shkalla;scale
+score;score;Wert;Puntaje;pikët;score
+high_cut;upper_cutoff;oberer_Schwellenwert;cutoff_superior;upper_cutoff;upper_cutoff
+low_cut;lower_cutoff;unterer_Schwellenwert;cutoff_inferior;lower_cutoff;lower_cutoff
+level;level;level;level;level;level
+cutoffs;cutoffs;cutoffs;cutoffs;cutoffs;cutoffs
+scales;Scales;Skalen;Escalas;shkalla;Scales
+items;Questionnaire items;Fragebogenitems;Items;items;items

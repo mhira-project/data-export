@@ -1,0 +1,34 @@
+
+
+.select {margin: 0px 0px 0px 10px;
+     /*border-style: ridge;
+       height: 90vh;
+       width: 75vw;
+       overflow-x: scroll;*/
+      }
+
+.box2 {margin: 0px 0px 0px 10px;
+     /*border-style: ridge;
+       height: 90vh;
+       width: 75vw;
+       overflow-x: scroll;*/
+      }
+
+#pannelId {margin: 0px 0px 0px 10px /* top right bottom left */
+  
+          }
+
+
+/*.warning{ padding: 20px;
+  background-color: #f44336; 
+  color: white;
+  margin-bottom: 15px;} */
+  
+
+.shiny-notification {
+             position:fixed;
+             width: 15vw;
+             top: calc(50%);
+             left: calc(50%);
+             }
+
