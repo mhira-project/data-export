@@ -1,25 +1,20 @@
-# generatePatientFilter = function(id = NULL,  firstName = NULL , lastName = NULL,  medicalRecordNo = NULL){
-#   
-# }
-
-
-
-generatePatientIdQuery = function(FLT){
-
-GQL = 'query($paging: CursorPaging, $sorting: [PatientSort!]) {
-    patients(paging: $paging, filter:{FLT}, sorting: $sorting) {
+generatePatientIdQuery = function(paging_string = ""){
+  GQL = paste0('query($sorting: [PatientSort!]) {
+    patients(
+      paging: { first: 50 ', paging_string, ' }, 
+      sorting: $sorting
+    ) {
       edges {
         node {
           id
         }
         cursor
       }
+      pageInfo {
+        hasNextPage
+      }
     }
-  }'
-
-if (missing(FLT)){FLT = ""}
-GQL = sub("FLT",FLT, GQL)   
-
-return(GQL)  
+  }')
   
+  return(GQL)
 }
