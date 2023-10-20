@@ -7,6 +7,10 @@ generatePatientIdQuery = function(paging_string = ""){
       edges {
         node {
           id
+          medicalRecordNo
+          departments{
+            name
+          }
         }
         cursor
       }
