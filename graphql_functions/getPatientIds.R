@@ -10,7 +10,7 @@ getPatientIds = function(token, url){
   hasNextPage <- TRUE
   iteration <- 1
   
-  while (hasNextPage && iteration <= 5) {
+  while (hasNextPage) {
     print(paste("Iteration: ", iteration))
     
     # Prepare the paging string
