@@ -36,6 +36,7 @@ source("utility_functions/patientInfoTable.R")
 source("utility_functions/extract_cutoffs.R")
 source("utility_functions/groupCutoffs.R")
 source("utility_functions/printItemTable.R")
+source("utility_functions/split_patient_ids.R")
 
 inactivity = inactivity(timeoutSeconds)
 
@@ -139,6 +140,8 @@ transMatrix = data.frame(fread("www/transMatrix.csv"), row.names = "Key")
     
     patientIds =  reactiveVal()
 
+    
+
     observe({
       req(!is_empty(session$userData))
       print("getting patient IDs from MHIRA")
@@ -152,8 +155,7 @@ transMatrix = data.frame(fread("www/transMatrix.csv"), row.names = "Key")
              "No patients found",
              type = "error",
              duration = 20)
-           session$close()
-        
+           session$close()      
       }
     }) %>%  bindEvent(input$accessToken)
     
@@ -165,20 +167,62 @@ transMatrix = data.frame(fread("www/transMatrix.csv"), row.names = "Key")
     response = reactiveVal() # the imported data as dataframe
 
 
-    observe({
-      req(!is_empty(patientIds()))
-      req(!is_empty(session$userData))
-      print("get patient report via graphql")
+observe({
+    req(!is_empty(patientIds()))
+    req(!is_empty(session$userData))
+    print("Get patient report via GraphQL in batches")
+    
+    all_patient_ids <- patientIds() %>% pull(id) %>% unique()
+    
+    # Split patient IDs into smaller batches, e.g., 100 IDs per batch
+    batch_size <- 100
+    patient_id_batches <- split_patient_ids(patientIds, batch_size)
+    
+    # Initialize an empty list to store the results
+    all_patient_data <- list()
+    
+    for (batch in patient_id_batches) {
+      print(paste("Fetching data for batch of", length(batch), "patients"))
+      print(batch)
+      
+      batch_response <- tryCatch({
+        getMultiplePatientReports(token = token, patientIds = batch, url = url)
+      }, warning = function(w) {
+        if (grepl("Session expired! Please login.", w$message)) {
+           showNotification("Session has expired! Please login again.", type = "error", duration = 20)
+            session$close()
+          return(NULL)  # Return NULL to indicate failure
+        }
+      }, error = function(e) {
+          showNotification("An error occurred while fetching patient IDs.", type = "error", duration = 20)
+          session$close()
+        return(NULL)  # Return NULL to indicate failure
+      })
+      
+      if (is.null(batch_response$data$generateMultiplePatientReports) || length(batch_response$data$generateMultiplePatientReports) == 0) {next}
+      
+      print(batch_response)
+      
+      if (exists("batch_response") && !is.null(batch_response)) {
+        response_df <- simplifyMultPatRep(response = batch_response)
+      }
+      
+      
+      
+      if (exists("response_df") && !is.null(response_df)) {
+        print(response_df)
+        all_patient_data <- append(all_patient_data, list(response_df))
+      }
+    }
+    
+    # Combine all the batch results into a single dataframe
+    combined_df <- bind_rows(all_patient_data)
+    
+    # Update the reactive value with the combined dataframe
+    response(combined_df)
+    
+  }) %>% bindEvent(patientIds())
 
-      response = getMultiplePatientReports(token = session$userData, patientIds = patientIds(), url = url)
-
-    #  checkGraphqlResponse(response, session) # can close session
-
-      response(response)
-
-      print("data has been obtained from API")
-
-    }) %>%  bindEvent(patientIds())
       
   
   
@@ -192,16 +236,12 @@ transMatrix = data.frame(fread("www/transMatrix.csv"), row.names = "Key")
       req(!is_empty(response()))
 
       response = response()
-      
 
-      # Simplify data and remove incomplete questionnaires
 
-      data = simplifyMultPatRep(response = response)
+    data = response
 
       # Terminate session if no completed data
-
       dataNotOkay = FALSE
-
       if(is_empty(data)){
         dataNotOkay = TRUE
       } else {
