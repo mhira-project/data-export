@@ -36,7 +36,6 @@ source("utility_functions/patientInfoTable.R")
 source("utility_functions/extract_cutoffs.R")
 source("utility_functions/groupCutoffs.R")
 source("utility_functions/printItemTable.R")
-source("utility_functions/split_patient_ids.R")
 
 inactivity = inactivity(timeoutSeconds)
 
@@ -112,187 +111,162 @@ transMatrix = data.frame(fread("www/transMatrix.csv"), row.names = "Key")
 
  ## SERVER ## ----------------------------------------------------------------- 
   
-  server = function(input, output, session) {
+server = function(input, output, session) {
   
-    
   # OBSERVE INACTIVITY AND CLOSE APP ------------------------------------------  
-    
-    observeEvent(input$timeOut, {
-      print(paste0("Session was closed at", " ", Sys.time()))
-      showModal(modalDialog(
-        title = "Timeout",
-        paste("Session was closed afer",
-              input$timeOut
-        ),
-        footer = NULL
-      ))
-      session$close()
-    })
-    
+  observeEvent(input$timeOut, {
+    print(paste0("Session was closed at", " ", Sys.time()))
+    showModal(modalDialog(
+      title = "Timeout",
+      paste("Session was closed after", input$timeOut),
+      footer = NULL
+    ))
+    session$close()
+  })
+  
   # STORE LOCAL STORAGE EXTRACTED TOKEN TO SHINY SESSION OBJECT ----------------
-    observe({ 
-      print("writing token to session object")
-      session$userData  = fromJSON(input$accessToken)$accessToken
-    }) %>%  bindEvent(input$accessToken)
+  observe({ 
+    print("writing token to session object")
+    session$userData = fromJSON(input$accessToken)$accessToken
+  }) %>% bindEvent(input$accessToken)
   
-    
-  # GET PATIENT IDS FROM MHIRA
-    
-    patientIds =  reactiveVal()
-
-    
-
-    observe({
-      req(!is_empty(session$userData))
-      print("getting patient IDs from MHIRA")
-      
-      Patients = getPatientIds(token = session$userData, url = url) 
-
-      if (length(Patients) > 0){
-          patientIds(Patients$id)
-      } else {
-           showNotification(
-             "No patients found",
-             type = "error",
-             duration = 20)
-           session$close()      
-      }
-    }) %>%  bindEvent(input$accessToken)
-    
-    
   
-     
+  # GET PATIENT IDS FROM MHIRA -----------------------------------------------
+  patientIds = reactiveVal()
+  
+  observe({
+    req(!is_empty(session$userData))
+    print("getting patient IDs from MHIRA")
+    
+    patients = getPatientIds(token = session$userData, url = url) 
+    
+    if (length(patients) > 0) {
+      # Store the full patients data frame
+      patientIds(patients)
+    } else {
+      showNotification(
+        "No patients found",
+        type = "error",
+        duration = 20)
+      session$close()      
+    }
+  }) %>% bindEvent(input$accessToken)
+  
   # GET PATIENT REPORT DATA ---------------------------------------------------
+  response = reactiveVal()
   
-    response = reactiveVal() # the imported data as dataframe
-
-
-observe({
+  observe({
     req(!is_empty(patientIds()))
     req(!is_empty(session$userData))
     print("Get patient report via GraphQL in batches")
     
-    all_patient_ids <- patientIds() %>% pull(id) %>% unique()
+    # Extract just the ID column from the patients dataframe
+    all_patient_ids <- unique(patientIds()$id)
     
-    # Split patient IDs into smaller batches, e.g., 100 IDs per batch
+    # Split patient IDs into smaller batches
     batch_size <- 100
-    patient_id_batches <- split_patient_ids(patientIds, batch_size)
+    patient_id_batches <- split(all_patient_ids, ceiling(seq_along(all_patient_ids)/batch_size))
     
     # Initialize an empty list to store the results
     all_patient_data <- list()
     
     for (batch in patient_id_batches) {
       print(paste("Fetching data for batch of", length(batch), "patients"))
-      print(batch)
       
       batch_response <- tryCatch({
-        getMultiplePatientReports(token = token, patientIds = batch, url = url)
+        getMultiplePatientReports(token = session$userData, patientIds = batch, url = url)
       }, warning = function(w) {
         if (grepl("Session expired! Please login.", w$message)) {
-           showNotification("Session has expired! Please login again.", type = "error", duration = 20)
-            session$close()
-          return(NULL)  # Return NULL to indicate failure
-        }
-      }, error = function(e) {
-          showNotification("An error occurred while fetching patient IDs.", type = "error", duration = 20)
+          showNotification("Session has expired! Please login again.", 
+                           type = "error", duration = 20)
           session$close()
-        return(NULL)  # Return NULL to indicate failure
+          return(NULL)
+        }
+        warning(w)  # Re-raise other warnings
+      }, error = function(e) {
+        showNotification("An error occurred while fetching patient data.", 
+                         type = "error", duration = 20)
+        print(e)  # Log the error for debugging
+        return(NULL)
       })
       
-      if (is.null(batch_response$data$generateMultiplePatientReports) || length(batch_response$data$generateMultiplePatientReports) == 0) {next}
-      
-      print(batch_response)
-      
-      if (exists("batch_response") && !is.null(batch_response)) {
+      if (!is.null(batch_response) && 
+          !is.null(batch_response$data$generateMultiplePatientReports) && 
+          length(batch_response$data$generateMultiplePatientReports) > 0) {
+        
         response_df <- simplifyMultPatRep(response = batch_response)
+        
+        if (!is.null(response_df) && nrow(response_df) > 0) {
+          all_patient_data[[length(all_patient_data) + 1]] <- response_df
+        }
       }
       
-      
-      
-      if (exists("response_df") && !is.null(response_df)) {
-        print(response_df)
-        all_patient_data <- append(all_patient_data, list(response_df))
-      }
+      # Add a small delay between batches to avoid overwhelming the server
+      Sys.sleep(0.5)
     }
     
     # Combine all the batch results into a single dataframe
-    combined_df <- bind_rows(all_patient_data)
-    
-    # Update the reactive value with the combined dataframe
-    response(combined_df)
+    if (length(all_patient_data) > 0) {
+      combined_df <- bind_rows(all_patient_data)
+      response(combined_df)
+    }
     
   }) %>% bindEvent(patientIds())
-
-      
   
+  # PROCESS AND PREPARE DATA FOR DOWNLOAD -------------------------------------
+  data = reactiveVal()
   
-  # CALCULATE SCALES AND APPLY CUTOFFS -----------------------------------------  
+  observe({
+    req(!is_empty(response()))
     
-    data = reactiveVal() # the imported data as dataframe
-    scales = reactiveVal() # calculated scales
-    cutoffs = reactiveVal() # only cutoffs without data
-
-    observe({
-      req(!is_empty(response()))
-
-      response = response()
-
-
-    data = response
-
-      # Terminate session if no completed data
-      dataNotOkay = FALSE
-      if(is_empty(data)){
-        dataNotOkay = TRUE
-      } else {
-       if(data %>% nrow < 1){dataNotOkay = TRUE}
+    current_data <- response()
+    
+    # Verify data validity
+    if (is.null(current_data) || nrow(current_data) < 1) {
+      showNotification(
+        "Problem with data. Does the user have access to patient data?",
+        type = "error",
+        duration = 20)
+      session$close()
+      return()
+    }
+    
+    # Store the processed data
+    data(current_data)
+    
+    # Render the data table
+    output$data <- renderDT({
+      data()
+    })
+    
+    # Setup download handler
+    output$downloadData <- downloadHandler(
+      filename = function() {
+        paste0("data_", format(Sys.time(), "%Y-%m-%d_%H-%M-%S"), ".csv")
+      },
+      content = function(file) {
+        # Prepare data for export by removing complex columns
+        export_data <- data() %>%
+          select(-any_of(c("questionnaireScripts", "choices", "multipleChoiceValue")))
+        
+        # Write to CSV with error handling
+        tryCatch({
+          fwrite(export_data, file, sep = ";")
+        }, error = function(e) {
+          # If CSV writing fails, create an error message HTML file
+          writeLines(
+            paste0("<html><body><h2>Error generating CSV</h2><p>",
+                   "Please try again in a moment. If the problem persists, ",
+                   "contact your system administrator.</p></body></html>"),
+            file
+          )
+        })
       }
-
-      if(dataNotOkay){
-        showNotification(
-          "Problem with data. Does the user have access to patient data?",
-          type = "error",
-          duration = 20)
-        session$close()
-        }
-
-      # Extract data from scripts
-
-      # questionnaireScripts = response$data$generatePatientReport$questionnaireScripts
-      # 
-      # cutoffs = extract_cutoffs(questionnaireScripts = questionnaireScripts)
-      # cutoffs = groupCutoffs(cutoffs = cutoffs)
-      # 
-      # scales = calculateScales(
-      #             simplifiedData = data,
-      #             questionnaireScripts =  questionnaireScripts)
-      # 
-      # 
-      # scales = applyCutOffs(scales = scales, cutoffs = cutoffs)
-
-
-      data(data)
-      output$data = data %>% renderDT()
-      dataForDownload = data %>% select(-questionnaireScripts, -choices, -multipleChoiceValue) %>% as.data.frame
-      
-      output$downloadData <- downloadHandler(
-        filename = function() {
-          paste("data_", format(Sys.time(), "%Y-%m-%d_%H-%M-%S"), ".csv", sep = "")
-        },
-        content = function(file) {
-          fwrite(dataForDownload, file, sep = ";")
-        }
-      )
-      
-      
-      # scales(scales)
-      # cutoffs(cutoffs)
-      print("scales have been calculated and cutoffs applied")
-
-            }) %>%  bindEvent(response())
+    )
     
+  }) %>% bindEvent(response())
   
-  }
+}
 
 ## APP ## --------------------------------------------------------------------
 
