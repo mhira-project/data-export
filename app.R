@@ -255,8 +255,6 @@ server = function(input, output, session) {
     
     # Clear patient data
     patientIds(NULL)
-    response(NULL)
-    data(NULL)
     
     showNotification("Logged out successfully", type = "message")
   })
@@ -292,7 +290,9 @@ server = function(input, output, session) {
     patientCount = 0,
     batchesProcessed = 0,
     totalBatches = 0,
-    lastProcessedTime = NULL
+    lastProcessedTime = NULL,
+    currentBatchTime = NULL,
+    errorMessage = NULL
   )
   
   # Setup streamlined download handler that processes data on-demand
@@ -305,105 +305,154 @@ server = function(input, output, session) {
       
       # Set processing flag
       dataStatus$isProcessing <- TRUE
+      dataStatus$errorMessage <- NULL
       
       # Extract patient IDs
       all_patient_ids <- unique(patientIds()$id)
       dataStatus$patientCount <- length(all_patient_ids)
       
-      # Split patient IDs into smaller batches
-      batch_size <- 100
+      # Split patient IDs into smaller batches - REDUCED FROM 100 TO 20
+      batch_size <- 20
       patient_id_batches <- split(all_patient_ids, ceiling(seq_along(all_patient_ids)/batch_size))
       dataStatus$totalBatches <- length(patient_id_batches)
       dataStatus$batchesProcessed <- 0
       
       # Process each batch and write directly to file
-      withProgress(message = 'Generating CSV file', value = 0, {
-        
-        # Flag to track if any data was written
-        data_written <- FALSE
-        
-        for (i in seq_along(patient_id_batches)) {
-          batch <- patient_id_batches[[i]]
-          incProgress(1/dataStatus$totalBatches, 
-                      detail = paste("Processing batch", i, "of", dataStatus$totalBatches))
+      tryCatch({
+        withProgress(message = 'Generating CSV file', value = 0, {
           
-          print(paste("Processing batch", i, "of", dataStatus$totalBatches, 
-                      "with", length(batch), "patients"))
+          # Flag to track if any data was written
+          data_written <- FALSE
           
-          # Fetch batch data
-          batch_response <- tryCatch({
-            getMultiplePatientReports(token = auth$token, patientIds = batch, url = url)
-          }, warning = function(w) {
-            if (grepl("Session expired! Please login.", w$message)) {
-              showNotification("Session has expired! Please login again.", 
-                               type = "error", duration = 20)
-              auth$isLoggedIn <- FALSE
-              auth$token <- NULL
-              auth$loginMethod <- NULL
+          for (i in seq_along(patient_id_batches)) {
+            batch_start_time <- Sys.time()
+            dataStatus$currentBatchTime <- batch_start_time
+            
+            batch <- patient_id_batches[[i]]
+            incProgress(1/dataStatus$totalBatches, 
+                        detail = paste("Processing batch", i, "of", dataStatus$totalBatches))
+            
+            # Improved logging
+            message_text <- paste("Processing batch", i, "of", dataStatus$totalBatches, 
+                                  "with", length(batch), "patients")
+            print(message_text)
+            
+            # Fetch batch data
+            batch_response <- tryCatch({
+              getMultiplePatientReports(token = auth$token, patientIds = batch, url = url)
+            }, warning = function(w) {
+              print(paste("Warning in batch", i, ":", w$message))
+              if (grepl("Session expired! Please login.", w$message)) {
+                showNotification("Session has expired! Please login again.", 
+                                 type = "error", duration = 20)
+                auth$isLoggedIn <- FALSE
+                auth$token <- NULL
+                auth$loginMethod <- NULL
+                return(NULL)
+              }
+              warning(w)  # Re-raise other warnings
               return(NULL)
-            }
-            warning(w)  # Re-raise other warnings
-            return(NULL)
-          }, error = function(e) {
-            print(paste("Error fetching batch", i, ":", e$message))
-            return(NULL)
-          })
-          
-          # Process batch if valid
-          if (!is.null(batch_response) && 
-              !is.null(batch_response$data$generateMultiplePatientReports) && 
-              length(batch_response$data$generateMultiplePatientReports) > 0) {
+            }, error = function(e) {
+              error_msg <- paste("Error fetching batch", i, ":", e$message)
+              print(error_msg)
+              dataStatus$errorMessage <- error_msg
+              return(NULL)
+            })
             
-            # Simplify the response data
-            batch_df <- simplifyMultPatRep(response = batch_response)
-            
-            if (!is.null(batch_df) && nrow(batch_df) > 0) {
-              # Remove complex columns
-              batch_df <- batch_df %>%
-                select(-any_of(c("questionnaireScripts", "choices", "multipleChoiceValue")))
+            # Process batch if valid
+            if (!is.null(batch_response) && 
+                !is.null(batch_response$data$generateMultiplePatientReports) && 
+                length(batch_response$data$generateMultiplePatientReports) > 0) {
               
-              # Write to CSV - append if not the first batch
-              tryCatch({
-                if (i == 1) {
-                  # First batch - write with header
-                  fwrite(batch_df, file, sep = ";")
-                  data_written <- TRUE
-                } else if (data_written) {
-                  # Subsequent batches - append without header
-                  fwrite(batch_df, file, sep = ";", append = TRUE, col.names = FALSE)
-                } else {
-                  # If previous batches failed, write with header
-                  fwrite(batch_df, file, sep = ";")
-                  data_written <- TRUE
-                }
-                
-                dataStatus$batchesProcessed <- i
-                dataStatus$hasData <- TRUE
-                
+              # Simplify the response data
+              batch_df <- tryCatch({
+                simplifyMultPatRep(response = batch_response)
               }, error = function(e) {
-                print(paste("Error writing batch", i, "to CSV:", e$message))
+                error_msg <- paste("Error simplifying batch", i, ":", e$message)
+                print(error_msg)
+                dataStatus$errorMessage <- error_msg
+                return(NULL)
               })
+              
+              if (!is.null(batch_df) && nrow(batch_df) > 0) {
+                # Remove complex columns
+                batch_df <- batch_df %>%
+                  select(-any_of(c("questionnaireScripts", "choices", "multipleChoiceValue")))
+                
+                # Write to CSV - append if not the first batch
+                tryCatch({
+                  if (i == 1) {
+                    # First batch - write with header
+                    fwrite(batch_df, file, sep = ";")
+                    data_written <- TRUE
+                  } else if (data_written) {
+                    # Subsequent batches - append without header
+                    fwrite(batch_df, file, sep = ";", append = TRUE, col.names = FALSE)
+                  } else {
+                    # If previous batches failed, write with header
+                    fwrite(batch_df, file, sep = ";")
+                    data_written <- TRUE
+                  }
+                  
+                  # Log successful write
+                  print(paste("Successfully wrote batch", i, "with", nrow(batch_df), "rows"))
+                  
+                  dataStatus$batchesProcessed <- i
+                  dataStatus$hasData <- TRUE
+                  
+                }, error = function(e) {
+                  error_msg <- paste("Error writing batch", i, "to CSV:", e$message)
+                  print(error_msg)
+                  dataStatus$errorMessage <- error_msg
+                })
+              } else {
+                print(paste("No data to write for batch", i))
+              }
+            } else {
+              print(paste("No valid response for batch", i))
             }
+            
+            # Explicit garbage collection after each batch
+            batch_df <- NULL
+            batch_response <- NULL
+            gc()
+            
+            # Calculate and log batch processing time
+            batch_end_time <- Sys.time()
+            batch_duration <- difftime(batch_end_time, batch_start_time, units = "secs")
+            print(paste("Batch", i, "completed in", round(batch_duration, 2), "seconds"))
+            
+            # Add a small delay between batches to let the browser breathe
+            Sys.sleep(0.2)
           }
           
-          # Add a small delay between batches
-          Sys.sleep(0.5)
-        }
+          # If no data was written successfully, create an error message HTML file
+          if (!data_written) {
+            error_html <- paste0(
+              "<html><body><h2>No data available</h2><p>",
+              "No patient data could be processed. ",
+              if(!is.null(dataStatus$errorMessage)) {
+                paste("Error:", dataStatus$errorMessage)
+              } else {
+                "Please check your access permissions or try again later."
+              },
+              "</p></body></html>"
+            )
+            
+            writeLines(error_html, file)
+            print("No data was written to file")
+          }
+        })
+      }, finally = {
+        # Ensure these flags are reset even if an error occurs
+        dataStatus$isProcessing <- FALSE
+        dataStatus$lastProcessedTime <- Sys.time()
         
-        # If no data was written successfully, create an error message HTML file
-        if (!data_written) {
-          writeLines(
-            paste0("<html><body><h2>No data available</h2><p>",
-                   "No patient data could be processed. Please check your access permissions or try again later.</p></body></html>"),
-            file
-          )
-        }
+        # Final garbage collection
+        gc()
       })
-      
-      # Update status
-      dataStatus$isProcessing <- FALSE
-      dataStatus$lastProcessedTime <- Sys.time()
-    }
+    },
+    contentType = "text/csv"
   )
   
   # Create a simple UI element to show processing status
@@ -413,12 +462,22 @@ server = function(input, output, session) {
         style = "margin-top: 15px;",
         p(paste("Processing data for", dataStatus$patientCount, "patients in", 
                 dataStatus$totalBatches, "batches.")),
-        p(paste("Batches processed:", dataStatus$batchesProcessed, "of", dataStatus$totalBatches))
+        p(paste("Batches processed:", dataStatus$batchesProcessed, "of", dataStatus$totalBatches)),
+        if (!is.null(dataStatus$errorMessage)) {
+          p(style = "color: red;", paste("Error:", dataStatus$errorMessage))
+        }
       )
     } else if (!is.null(dataStatus$lastProcessedTime)) {
       div(
         style = "margin-top: 15px;",
-        p(paste("Last processed:", format(dataStatus$lastProcessedTime, "%Y-%m-%d %H:%M:%S")))
+        p(paste("Last processed:", format(dataStatus$lastProcessedTime, "%Y-%m-%d %H:%M:%S"))),
+        p(paste("Batches completed:", dataStatus$batchesProcessed, 
+                "of", dataStatus$totalBatches)),
+        if (!is.null(dataStatus$errorMessage)) {
+          p(style = "color: red;", paste("Error:", dataStatus$errorMessage))
+        } else if (dataStatus$hasData) {
+          p(style = "color: green;", "Processing completed successfully")
+        }
       )
     }
   })
